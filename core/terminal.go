@@ -199,7 +199,9 @@ func (t *Terminal) handleConfig(args []string) error {
 	} else if pn == 2 {
 		switch args[0] {
 		case "domain":
-			t.cfg.SetBaseDomain(args[1])
+			if !t.cfg.SetBaseDomain(args[1]) {
+				return nil
+			}
 			t.cfg.ResetAllSites()
 			t.manageCertificates(false)
 			return nil

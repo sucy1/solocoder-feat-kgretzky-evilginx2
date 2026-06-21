@@ -5,11 +5,17 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/kgretzky/evilginx2/log"
 
 	"github.com/spf13/viper"
+)
+
+var (
+	domainRegexp = regexp.MustCompile(`^(?i)[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?)+$`)
+	hostnameRegexp = regexp.MustCompile(`^(?i)([a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$`)
 )
 
 var BLACKLIST_MODES = []string{"all", "unauth", "noadd", "off"}
@@ -303,8 +309,17 @@ func (c *Config) SetSiteHostname(site string, hostname string) bool {
 		log.Error("phishlet is a template - can't set hostname")
 		return false
 	}
+	hostname = strings.TrimSpace(hostname)
+	if hostname == "" {
+		log.Error("hostname can't be empty")
+		return false
+	}
+	if !isValidHostname(hostname) {
+		log.Error("invalid hostname format '%s': must only contain letters, digits, dots and hyphens, no spaces or special characters", hostname)
+		return false
+	}
 	validDomain := false
-	if hostname != "" && hostname != c.general.Domain && !strings.HasSuffix(hostname, "."+c.general.Domain) {
+	if hostname != c.general.Domain && !strings.HasSuffix(hostname, "."+c.general.Domain) {
 		for _, d := range c.domains {
 			if hostname == d.Domain || strings.HasSuffix(hostname, "."+d.Domain) {
 				validDomain = true
@@ -350,11 +365,35 @@ func (c *Config) SetSiteUnauthUrl(site string, _url string) bool {
 	return true
 }
 
-func (c *Config) SetBaseDomain(domain string) {
+func (c *Config) SetBaseDomain(domain string) bool {
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		log.Error("domain can't be empty")
+		return false
+	}
+	if !isValidDomain(domain) {
+		log.Error("invalid domain format '%s': must only contain letters, digits, dots and hyphens, no spaces or special characters", domain)
+		return false
+	}
 	c.general.Domain = domain
 	c.cfg.Set(CFG_GENERAL, c.general)
 	log.Info("server domain set to: %s", domain)
 	c.cfg.WriteConfig()
+	return true
+}
+
+func isValidDomain(domain string) bool {
+	if len(domain) > 253 {
+		return false
+	}
+	return domainRegexp.MatchString(domain)
+}
+
+func isValidHostname(hostname string) bool {
+	if len(hostname) > 253 {
+		return false
+	}
+	return hostnameRegexp.MatchString(hostname)
 }
 
 func (c *Config) SetServerIP(ip_addr string) {
@@ -915,10 +954,36 @@ func (c *Config) GetGoPhishInsecureTLS() bool {
 	return c.gophishConfig.InsecureTLS
 }
 
-func (c *Config) AddDomain(domain *DomainConfig) {
+func (c *Config) AddDomain(domain *DomainConfig) bool {
+	if domain == nil {
+		log.Error("domain config can't be nil")
+		return false
+	}
+	domain.Domain = strings.TrimSpace(domain.Domain)
+	if domain.Domain == "" {
+		log.Error("domain name can't be empty")
+		return false
+	}
+	if !isValidDomain(domain.Domain) {
+		log.Error("invalid domain format '%s': must only contain letters, digits, dots and hyphens, no spaces or special characters", domain.Domain)
+		return false
+	}
+	if domain.TargetUrl != "" {
+		if _, err := url.ParseRequestURI(domain.TargetUrl); err != nil {
+			log.Error("invalid target_url '%s': %v", domain.TargetUrl, err)
+			return false
+		}
+	}
+	if domain.UnauthUrl != "" {
+		if _, err := url.ParseRequestURI(domain.UnauthUrl); err != nil {
+			log.Error("invalid unauth_url '%s': %v", domain.UnauthUrl, err)
+			return false
+		}
+	}
 	c.domains = append(c.domains, domain)
 	c.cfg.Set(CFG_DOMAINS, c.domains)
 	c.cfg.WriteConfig()
+	return true
 }
 
 func (c *Config) GetDomains() []*DomainConfig {
