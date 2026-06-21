@@ -174,11 +174,29 @@ func (d *Database) getExportRecords() ([]SessionExportRecord, error) {
 }
 
 func (d *Database) normalizeCsvField(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", " ")
-	s = strings.ReplaceAll(s, "\r", " ")
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\t", " ")
-	return strings.TrimSpace(s)
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == 0x00:
+			continue
+		case r == '\r' || r == '\n' || r == '\t' || r == '\v' || r == '\f':
+			b.WriteRune(' ')
+		case r < 0x20:
+			continue
+		default:
+			b.WriteRune(r)
+		}
+	}
+	result := strings.TrimSpace(b.String())
+	if len(result) > 0 {
+		first := result[0]
+		if first == '=' || first == '+' || first == '-' || first == '@' ||
+			first == '\t' || first == '\r' || first == '%' || first == '|' {
+			result = "'" + result
+		}
+	}
+	return result
 }
 
 func (d *Database) ExportSessionsCSV(prefix string) (string, error) {

